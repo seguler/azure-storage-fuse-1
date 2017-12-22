@@ -15,6 +15,7 @@
 #include <map>
 #include <memory>
 #include <dirent.h>
+#include <deque>
 
 // Declare that we're using version 2.9 of FUSE
 // 3.0 is not built-in to many distros yet.
@@ -40,7 +41,8 @@ using namespace microsoft_azure::storage;
 // We use two different locking schemes to protect files / blobs against data corruption and data loss scenarios.
 // The first is an in-memory std::mutex, the second is flock (Linux).  Each file path gets its own mutex and flock lock.
 // The in-memory mutex should only be held while control is in a method that is directly communicating with Azure Storage.
-// The flock lock should be held continuously, from the time that the file is opened until the time that the file is closed.  It should also be held during blob download and upload.
+// The flock lock should be held continuously, from the time that the file is opened until the time that the file is closed.  
+// It should also be held during blob download and upload.
 // Blob download should hold the flock lock in exclusive mode.  Read/write operations should hold it in shared mode.
 // Explanations for why we lock in various places are in-line.
 
@@ -65,6 +67,15 @@ private:
     std::mutex m_mutex;
     std::map<std::string, std::shared_ptr<std::mutex>> m_lock_map;
 };
+
+// deque to age cached files based on timeout
+struct file_to_delete
+{
+    const char *path;
+    time_t closed_time;    
+};
+extern std::deque<file_to_delete> cleanup;
+void cleanup_cache();
 
 // FUSE gives you one 64-bit pointer to use for communication between API's.
 // An instance of this struct is pointed to by that pointer.

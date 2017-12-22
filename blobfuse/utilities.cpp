@@ -19,6 +19,62 @@ std::string prepend_mnt_path_string(const std::string path)
     return str_options.tmpPath + "/root" + path;
 }
 
+// cleanup function to clean cached files that are too old
+void cleanup_cache()
+{
+
+    while(true){
+
+        //if deque is empty, skip
+        if(cleanup.empty())
+        {
+       	    //run it every 1 second
+            usleep(1000);
+            continue;
+        }
+
+        //check if the closed time is old enough to delete
+        if((time(NULL) - cleanup.front().closed_time) > file_cache_timeout_in_seconds)
+        {
+            fprintf(stdout, "File timed out %s\n", cleanup.front().path);
+
+            std::string pathString(cleanup.front().path);
+            const char * mntPath;
+            std::string mntPathString = prepend_mnt_path_string(pathString);
+            mntPath = mntPathString.c_str();
+
+            //check if the file on disk is still too old
+            //mutex lock
+            auto fmutex = file_lock_map::get_instance()->get_mutex(cleanup.front().path);
+            std::lock_guard<std::mutex> lock(*fmutex);            
+
+            struct stat buf;
+            stat(mntPath, &buf);
+            if((time(NULL) - buf.st_mtime) > file_cache_timeout_in_seconds)
+            {
+                fprintf(stdout, "File clean up %s\n", mntPath);
+                if(list_attribute_cache==false)
+                {
+                    unlink(mntPath);
+                }
+                else
+                {
+                    int res1 = truncate(mntPath, 0);
+                    int res2 = truncate(mntPath, buf.st_size);
+                    if(res1 == -1 || res2 == -1)
+                    {
+                        unlink(mntPath);
+                    }
+                }
+            }
+
+            cleanup.pop_front();
+
+        }
+    }
+
+}
+
 int ensure_files_directory_exists_in_cache(const std::string file_path)
 {
     char *pp;
