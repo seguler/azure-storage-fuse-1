@@ -15,6 +15,7 @@
 #include <map>
 #include <memory>
 #include <dirent.h>
+#include <libgen.h>
 #include <deque>
 
 // Declare that we're using version 2.9 of FUSE
@@ -75,7 +76,7 @@ struct file_to_delete
     time_t closed_time;    
 };
 extern std::deque<file_to_delete> cleanup;
-void cleanup_cache();
+void gc_cache();
 
 // FUSE gives you one 64-bit pointer to use for communication between API's.
 // An instance of this struct is pointed to by that pointer.

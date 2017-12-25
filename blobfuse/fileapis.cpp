@@ -417,8 +417,6 @@ int azs_release(const char *path, struct fuse_file_info * fi)
         close(((struct fhwrapper *)fi->fh)->fh);
 
         // store the file into the cleanup list
-        fprintf(stdout, "Now closing %s.\n", path);
-
         file_to_delete file;
         file.path = strdup(path);
         file.closed_time = time(NULL); 

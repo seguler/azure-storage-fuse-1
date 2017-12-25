@@ -1,5 +1,5 @@
-
 #include "blobfuse.h"
+#include <sys/file.h>
 
 int map_errno(int error)
 {
@@ -20,7 +20,7 @@ std::string prepend_mnt_path_string(const std::string path)
 }
 
 // cleanup function to clean cached files that are too old
-void cleanup_cache()
+void gc_cache()
 {
 
     while(true){
@@ -36,8 +36,12 @@ void cleanup_cache()
         //check if the closed time is old enough to delete
         if((time(NULL) - cleanup.front().closed_time) > file_cache_timeout_in_seconds)
         {
-            fprintf(stdout, "File timed out %s\n", cleanup.front().path);
+            if (AZS_PRINT)
+            {
+                fprintf(stdout, "File %s timed out at %ld\n", cleanup.front().path, time(NULL));
+            }
 
+            // path in the temp location
             std::string pathString(cleanup.front().path);
             const char * mntPath;
             std::string mntPathString = prepend_mnt_path_string(pathString);
@@ -52,19 +56,63 @@ void cleanup_cache()
             stat(mntPath, &buf);
             if((time(NULL) - buf.st_mtime) > file_cache_timeout_in_seconds)
             {
-                fprintf(stdout, "File clean up %s\n", mntPath);
+                if (AZS_PRINT)
+                {
+                    fprintf(stdout, "File %s clean up at %ld \n", mntPath, time(NULL));
+                }
+
                 if(list_attribute_cache==false)
                 {
+                    //clean up the file from cache
                     unlink(mntPath);
                 }
                 else
                 {
-                    int res1 = truncate(mntPath, 0);
-                    int res2 = truncate(mntPath, buf.st_size);
-                    if(res1 == -1 || res2 == -1)
+                    //create a sparse file if list attribute cache is enabled
+                    int fd = open(mntPath, O_WRONLY);
+                    int flockres = flock(fd, LOCK_EX|LOCK_NB);
+                    if (flockres != 0)
                     {
-                        unlink(mntPath);
+                        if (errno == EWOULDBLOCK)
+                        {
+                            // Someone else holds the lock.  In this case, we will postpone updating the cache until the next time open() is called.
+                            // TODO: examine the possibility that we can never acquire the lock and refresh the cache.
+                            if (AZS_PRINT)
+                            {
+                                fprintf(stdout, "Failed to lock file %s for clean up\n", cleanup.front().path);
+                            }
+                        }
+                        else
+                        {
+                            // Failed to acquire the lock for some other reason.  We close the open fd, and continue.
+                            if (AZS_PRINT)
+                            {
+                                fprintf(stdout, "Failed to lock file %s for clean up\n", cleanup.front().path);
+                            }
+                        }
                     }
+                    else
+                    {
+                        //truncate to file to 0; then inflate to its cached size. This creates a sparse file
+                        int res1 = ftruncate(fd, 0);
+                        fsync(fd);
+                        int res2 = ftruncate(fd, buf.st_size);
+                        if(res1 == -1 || res2 == -1)
+                        {
+                            // need to invalidate cache because something went wrong
+                            char * copyPath = strdup(cleanup.front().path);
+                            char * dirName = dirname(copyPath);
+                            std::string dirNameString(dirName);
+                            std::string dirSigString = dirNameString + '/' + directorySignifier;
+                            std::string fullPathDirSignature = prepend_mnt_path_string(dirSigString);
+                            fprintf(stdout, "removing cached %s because something went wrong\n", fullPathDirSignature.c_str());
+                            unlink(fullPathDirSignature.c_str());
+
+                            unlink(mntPath);
+                        }
+                    }
+                    flock(fd, LOCK_UN);
+                    close(fd);
                 }
             }
 
