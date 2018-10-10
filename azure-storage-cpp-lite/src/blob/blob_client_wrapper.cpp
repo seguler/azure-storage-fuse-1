@@ -303,6 +303,7 @@ namespace microsoft_azure {
 
         list_blobs_hierarchical_response blob_client_wrapper::list_blobs_hierarchical(const std::string &container, const std::string &delimiter, const std::string &continuation_token, const std::string &prefix, int max_results)
         {
+//            syslog(LOG_INFO, "list_blobs_hierarchical called from non-cache code.\n");
             if(!is_valid())
             {
                 errno = client_not_init;
@@ -763,6 +764,7 @@ namespace microsoft_azure {
 
         blob_property blob_client_wrapper::get_blob_property(const std::string &container, const std::string &blob)
         {
+//            syslog(LOG_INFO, "get_blob_property called from non-cache code on %s.\n", blob.c_str());
             if(!is_valid())
             {
                 errno = client_not_init;

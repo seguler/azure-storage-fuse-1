@@ -118,7 +118,7 @@ int azs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t, stru
     filler(buf, "..", NULL, 0);
 
     for (size_t i = 0; i < listResults.size(); i++)
-    {
+        {
         int fillerResult;
         // We need to parse out just the trailing part of the path name.
         int len = listResults[i].name.size();
