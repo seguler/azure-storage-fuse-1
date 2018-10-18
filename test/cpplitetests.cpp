@@ -1,5 +1,6 @@
 #include <uuid/uuid.h>
 #include <ftw.h>
+#include <random>
 
 #include "gtest/gtest.h"
 //#include "gmock/gmock.h"
@@ -43,7 +44,7 @@ public:
 
     // This runs once, before any tests in "BlobClientWrapperTest"
     static void SetUpTestCase() {
-        int ret = read_config("../connection.cfg");
+        int ret = read_config("../my_connection.cfg");
         ASSERT_EQ(0, ret) << "Read config failed.";
         std::string blob_endpoint;
         std::string sas_token;
@@ -254,11 +255,11 @@ TEST_F(BlobClientWrapperTest, BlobUploadDownloadMedium)
     run_upload_download(5 * 1024 * 1024);
 }
 
-TEST_F(BlobClientWrapperTest, BlobUploadDownloadLarge)
+/*TEST_F(BlobClientWrapperTest, BlobUploadDownloadLarge)
 {
     run_upload_download(1 * 1024 * 1024 * 1024);  // Comment this test out if the test pass is taking too long during rapid iteration.
 }
-
+*/
 
 TEST_F(BlobClientWrapperTest, BlobUploadDownloadFailures)
 {
@@ -392,7 +393,7 @@ TEST_F(BlobClientWrapperTest, CopyBlob)
     std::string file_path_2 = tmp_dir + "/tmpfile2";
     std::string file_text_2 = "some different file text here.";
 
-    write_to_file(file_path, file_text);
+    write_to_file(file_path_2, file_text_2);
     std::string blob_2_name("blob2name");
 
     errno = 0;
@@ -402,8 +403,18 @@ TEST_F(BlobClientWrapperTest, CopyBlob)
     errno = 0;
     blob_property props = test_blob_client_wrapper->get_blob_property(container_name, blob_2_name);
     ASSERT_EQ(0, errno) << "get_blob_property failed";
-//    ASSERT_EQ(file_text_2.size(), props.size);
+    ASSERT_EQ(file_text_2.size(), props.size);
     ASSERT_TRUE(props.copy_status.empty()) << "copy_status not empty as expected.";
+
+    errno = 0;
+    std::vector<list_blobs_hierarchical_item> blobs = list_all_blobs(container_name, "/", "");
+    ASSERT_EQ(0, errno) << "list_all_blobs failed";
+    ASSERT_EQ(2, blobs.size()) << "Incorrect blob bount in list blobs";
+    ASSERT_EQ(blobs[0].name, blob_1_name) << "Incorrect blob 1 name in list blobs";
+    ASSERT_TRUE(blobs[0].copy_status.empty()) << "Incorrect copy status for blob 1";
+    ASSERT_EQ(blobs[1].name, blob_2_name) << "Incorrect blob 2 name in list blobs";
+    ASSERT_TRUE(blobs[1].copy_status.empty()) << "Incorrect copy status for blob 2";
+
 
     errno = 0;
     test_blob_client_wrapper->start_copy(container_name, blob_1_name, container_name, blob_2_name);
@@ -417,6 +428,15 @@ TEST_F(BlobClientWrapperTest, CopyBlob)
         sleep(1);
     } while (props.copy_status.compare("success\r\n") != 0); // HTTP spec specifies CRLF, and we aren't trimming (but probably should).
     ASSERT_EQ(file_text.size(), props.size);
+
+    errno = 0;
+    blobs = list_all_blobs(container_name, "/", "");
+    ASSERT_EQ(0, errno) << "list_all_blobs failed";
+    ASSERT_EQ(2, blobs.size()) << "Incorrect blob bount in list blobs";
+    ASSERT_EQ(blobs[0].name, blob_1_name) << "Incorrect blob 1 name in list blobs";
+    ASSERT_TRUE(blobs[0].copy_status.empty()) << "Incorrect copy status for blob 1";
+    ASSERT_EQ(blobs[1].name, blob_2_name) << "Incorrect blob 2 name in list blobs";
+    ASSERT_EQ("success", blobs[1].copy_status) << "Incorrect copy status for blob 2";
 
     // Test copy blob to a new blob
     std::string blob_3_name("blob3name");
@@ -437,7 +457,7 @@ TEST_F(BlobClientWrapperTest, CopyBlob)
     // Failure case
     errno = 0;
     test_blob_client_wrapper->start_copy(container_name, blob_1_name, "notacontainer", blob_2_name);
-    ASSERT_EQ(404, errno) << "start_copy did not as expected";
+    ASSERT_EQ(404, errno) << "start_copy did not fail as expected";
 
 }
 

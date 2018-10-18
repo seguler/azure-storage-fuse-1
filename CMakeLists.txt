@@ -156,7 +156,7 @@ if(UNIX)
 
   set(CPACK_GENERATOR "DEB")
   set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Microsoft - Azure Storage")
-  set(CPACK_DEBIAN_PACKAGE_DESCRIPTION "blobfuse 1.0.2 - FUSE adapter for Azure Blob Storage")
+  set(CPACK_DEBIAN_PACKAGE_DESCRIPTION "blobfuse 1.1.0 - FUSE adapter for Azure Blob Storage")
   include(CPack)
 endif(UNIX)
 
@@ -203,7 +203,7 @@ if(INCLUDE_TESTS)
   project(blobfusetests)
   set(CMAKE_CXX_STANDARD 14)
   pkg_search_module(UUID REQUIRED uuid)
-  add_executable(blobfusetests ${BLOBFUSE_HEADER} ${BLOBFUSE_SOURCE} ${AZURE_STORAGE_HEADER} ${AZURE_STORAGE_SOURCE} blobfuse/blobfuse.cpp test/cpplitetests.cpp test/attribcachetests.cpp)
+  add_executable(blobfusetests ${BLOBFUSE_HEADER} ${BLOBFUSE_SOURCE} ${AZURE_STORAGE_HEADER} ${AZURE_STORAGE_SOURCE} blobfuse/blobfuse.cpp test/cpplitetests.cpp test/attribcachetests.cpp test/attribcachesynchronizationtests.cpp)
   target_link_libraries(blobfusetests ${CURL_LIBRARIES} ${GNUTLS_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} ${UUID_LIBRARIES} fuse gcrypt gmock_main)
 
 endif()

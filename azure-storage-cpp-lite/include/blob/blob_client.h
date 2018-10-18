@@ -261,6 +261,7 @@ namespace microsoft_azure { namespace storage {
     {
     public:
 
+        virtual ~sync_blob_client() = 0;
         virtual bool is_valid() const = 0;
         /// <summary>
         /// List blobs in segments.

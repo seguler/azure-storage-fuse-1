@@ -79,11 +79,11 @@ namespace microsoft_azure {
                         properties.content_encoding = response.blobs[i].content_encoding;
                         properties.content_language = response.blobs[i].content_language;
                         properties.size = response.blobs[i].content_length;
-                        properties.content_md5 = response.blobs[i].content_length;
+                        properties.content_md5 = response.blobs[i].content_md5;
                         properties.content_type = response.blobs[i].content_type;
                         properties.etag = response.blobs[i].etag;
                         properties.metadata = response.blobs[i].metadata;
-//                        properties.copy_status = response.blobs[i].copy_status;
+                        properties.copy_status = response.blobs[i].copy_status;
                         properties.last_modified = curl_getdate(response.blobs[i].last_modified.c_str(), NULL);
 
                         // Note that this internally locks the mutex protecting the attr_cache blob list.  Normally this is fine, but here it's a bit concerning, because we've already 
@@ -304,5 +304,4 @@ namespace microsoft_azure {
                 cache_item->m_confirmed = false;
             }
         }
-
 }}
