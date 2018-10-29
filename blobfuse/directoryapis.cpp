@@ -169,7 +169,7 @@ int azs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t, stru
                         }
                     }
                     // Avoid duplicates
-                    local_list_results.push_back(prev_token_str);
+//                    local_list_results.push_back(prev_token_str);
 
                 }
                 else
