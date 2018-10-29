@@ -1,53 +1,54 @@
-
-
-
 #include "blob/blob_client.h"
 
 namespace microsoft_azure {
     namespace storage {
 
-
-            std::string get_parent_str(std::string object)
+        // Helper to the the string representing the parent directory of a given item.
+        std::string get_parent_str(std::string object)
+        {
+            size_t last_slash_idx = object.rfind('/');
+            if (std::string::npos != last_slash_idx)
             {
-                size_t last_slash_idx = object.rfind('/');
-                if (std::string::npos != last_slash_idx)
-                {
-                    return object.substr(0, last_slash_idx);
-                }
-                return std::string();
+                return object.substr(0, last_slash_idx);
             }
+            return std::string();
+        }
 
-            std::shared_ptr<std::shared_timed_mutex> blob_client_attr_cache_wrapper::attribute_cache::get_dir_item(const std::string& path)
+        // Performs a thread-safe map lookup of the input key in the directory map.
+        // Will create new entries if necessary before returning.
+        std::shared_ptr<std::shared_timed_mutex> blob_client_attr_cache_wrapper::attribute_cache::get_dir_item(const std::string& path)
+        {
+            std::lock_guard<std::mutex> lock(dirs_mutex);
+            auto iter = dir_cache.find(path);
+            if(iter == dir_cache.end())
             {
-                std::lock_guard<std::mutex> lock(dirs_mutex);
-                auto iter = dir_cache.find(path);
-                if(iter == dir_cache.end())
-                {
-                    auto dir_item = std::make_shared<std::shared_timed_mutex>();
-                    dir_cache[path] = dir_item;
-                    return dir_item;
-                }
-                else
-                {
-                    return iter->second;
-                }
+                auto dir_item = std::make_shared<std::shared_timed_mutex>();
+                dir_cache[path] = dir_item;
+                return dir_item;
             }
+            else
+            {
+                return iter->second;
+            }
+        }
 
-            std::shared_ptr<blob_client_attr_cache_wrapper::blob_cache_item> blob_client_attr_cache_wrapper::attribute_cache::get_blob_item(const std::string& path)
+        // Performs a thread-safe map lookup of the input key in the blob map.
+        // Will create new entries if necessary before returning.
+        std::shared_ptr<blob_client_attr_cache_wrapper::blob_cache_item> blob_client_attr_cache_wrapper::attribute_cache::get_blob_item(const std::string& path)
+        {
+            std::lock_guard<std::mutex> lock(blobs_mutex);
+            auto iter = blob_cache.find(path);
+            if(iter == blob_cache.end())
             {
-                std::lock_guard<std::mutex> lock(blobs_mutex);
-                auto iter = blob_cache.find(path);
-                if(iter == blob_cache.end())
-                {
-                    auto blob_item = std::make_shared<blob_client_attr_cache_wrapper::blob_cache_item>("", blob_property(false));
-                    blob_cache[path] = blob_item;
-                    return blob_item;
-                }
-                else
-                {
-                    return iter->second;
-                }
+                auto blob_item = std::make_shared<blob_client_attr_cache_wrapper::blob_cache_item>("", blob_property(false));
+                blob_cache[path] = blob_item;
+                return blob_item;
             }
+            else
+            {
+                return iter->second;
+            }
+        }
 
         /// <summary>
         /// List blobs in segments.
@@ -60,22 +61,20 @@ namespace microsoft_azure {
         {
             std::shared_ptr<std::shared_timed_mutex> dir_mutex = attr_cache.get_dir_item(prefix);
             std::unique_lock<std::shared_timed_mutex> uniquelock(*dir_mutex);
-//            syslog(LOG_INFO, "LBH called from the cache, prefix = %s.\n", prefix.c_str());
 
             errno = 0;
             list_blobs_hierarchical_response response = m_blob_client_wrapper->list_blobs_hierarchical(container, delimiter, continuation_token, prefix, maxresults);
-//            syslog(LOG_INFO, "LBH returned, errno = %d.\n", errno);
             if (errno == 0)
             {
                 for (size_t i = 0; i < response.blobs.size(); i++)
                 {
                     if (!response.blobs[i].is_directory)
                     {
-//                        syslog(LOG_INFO, "Adding %s to the attr cache.\n", response.blobs[i].name.c_str());
+                        // TODO - modify list_blobs to return blob_property items; simplifying this logic.
                         blob_property properties(true);
 
                         properties.cache_control = response.blobs[i].cache_control;
-//                        properties.content_disposition = response.blobs[i].content_disposition;
+//                        properties.content_disposition = response.blobs[i].content_disposition;  // TODO - once this is available in cpplite.
                         properties.content_encoding = response.blobs[i].content_encoding;
                         properties.content_language = response.blobs[i].content_language;
                         properties.size = response.blobs[i].content_length;
@@ -122,7 +121,7 @@ namespace microsoft_azure {
         void blob_client_attr_cache_wrapper::put_blob(const std::string &sourcePath, const std::string &container, const std::string blob, const std::vector<std::pair<std::string, std::string>> &metadata)
         {
             // Invalidate the cache.
-            // TODO: consider updating the cache with the new values, if correctness can be ensured.
+            // TODO: consider updating the cache with the new values.  Will require modifying cpplite to return info from put_blob.
             std::shared_ptr<std::shared_timed_mutex> dir_mutex = attr_cache.get_dir_item(get_parent_str(blob));
             std::shared_ptr<blob_client_attr_cache_wrapper::blob_cache_item> cache_item = attr_cache.get_blob_item(blob);
             std::shared_lock<std::shared_timed_mutex> dirlock(*dir_mutex);
@@ -141,7 +140,7 @@ namespace microsoft_azure {
         void blob_client_attr_cache_wrapper::upload_block_blob_from_stream(const std::string &container, const std::string blob, std::istream &is, const std::vector<std::pair<std::string, std::string>> &metadata)
         {
             // Invalidate the cache.
-            // TODO: consider updating the cache with the new values, if correctness can be ensured.
+            // TODO: consider updating the cache with the new values.  Will require modifying cpplite to return info from put_blob.
             std::shared_ptr<std::shared_timed_mutex> dir_mutex = attr_cache.get_dir_item(get_parent_str(blob));
             std::shared_ptr<blob_client_attr_cache_wrapper::blob_cache_item> cache_item = attr_cache.get_blob_item(blob);
             std::shared_lock<std::shared_timed_mutex> dirlock(*dir_mutex);
@@ -161,7 +160,7 @@ namespace microsoft_azure {
         void blob_client_attr_cache_wrapper::upload_file_to_blob(const std::string &sourcePath, const std::string &container, const std::string blob, const std::vector<std::pair<std::string, std::string>> &metadata, size_t parallel)
         {
             // Invalidate the cache.
-            // TODO: consider updating the cache with the new values, if correctness can be ensured.
+            // TODO: consider updating the cache with the new values.  Will require modifying cpplite to return info from put_blob.
             std::shared_ptr<std::shared_timed_mutex> dir_mutex = attr_cache.get_dir_item(get_parent_str(blob));
             std::shared_ptr<blob_client_attr_cache_wrapper::blob_cache_item> cache_item = attr_cache.get_blob_item(blob);
             std::shared_lock<std::shared_timed_mutex> dirlock(*dir_mutex);
@@ -215,6 +214,8 @@ namespace microsoft_azure {
         /// </summary>
         /// <param name="container">The container name.</param>
         /// <param name="blob">The blob name.</param>
+        /// <param name="assume_cache_invalid">True if the blob's properties should be fetched from the service, even if the cache item seels valid.
+        /// Useful if there is reason to suspect the properties may have changed behind the scenes (specifically, if there's a pending copy operation.)</param>
         blob_property blob_client_attr_cache_wrapper::get_blob_property(const std::string &container, const std::string &blob, bool assume_cache_invalid)
         {
 //            syslog(LOG_INFO, "get_blob_property called from cache code on %s .\n", blob.c_str());
@@ -224,21 +225,17 @@ namespace microsoft_azure {
 
             if (!assume_cache_invalid)
             {
-//                syslog(LOG_INFO, "Cache is not assumed invalid.\n");
                 std::shared_lock<std::shared_timed_mutex> sharedlock(cache_item->m_mutex);
                 if (cache_item->m_confirmed)
                 {
-//                    syslog(LOG_INFO, "Returning cached data for %s.\n", blob.c_str());
                     return cache_item->m_props;
                 }
             }
 
-
             {
-//                syslog(LOG_INFO, "Looking up attrs for %s on the service.\n", blob.c_str());
                 std::unique_lock<std::shared_timed_mutex> uniquelock(cache_item->m_mutex);
                 errno = 0;
-                cache_item->m_props =  m_blob_client_wrapper->get_blob_property(container, blob);
+                cache_item->m_props = m_blob_client_wrapper->get_blob_property(container, blob);
                 if (errno != 0)
                 {
                     return blob_property(false); // keep errno unchanged
@@ -292,7 +289,6 @@ namespace microsoft_azure {
         {
             // No need to lock on the source, as we're neither modifying nor querying the source blob or its cached content.
             // We do need to lock on the destination, because if the start copy operation succeeds we need to invalidate the cached data.
-            // 
             std::shared_ptr<std::shared_timed_mutex> dir_mutex = attr_cache.get_dir_item(get_parent_str(destBlob));
             std::shared_ptr<blob_client_attr_cache_wrapper::blob_cache_item> cache_item = attr_cache.get_blob_item(destBlob);
             std::shared_lock<std::shared_timed_mutex> dirlock(*dir_mutex);

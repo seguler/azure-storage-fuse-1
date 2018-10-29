@@ -21,11 +21,19 @@ public:
     MOCK_METHOD4(start_copy, void(const std::string &sourceContainer, const std::string &sourceBlob, const std::string &destContainer, const std::string &destBlob));
 };
 
-
+// These tests validate that calls into the cache layer from multiple threads are synchronized & serialized properly.
+// Correctness of return values is not tested (that's in another file.)
+// The approach is, for every possible pair of operations (or calls), run the operations in parallel in three different scenarios:
+//      - On the same blob
+//      - On two different blobs in the same directory
+//      - On two blobs in different directories.
+// The first operation that runs contains a small delay; the second one does not.  If the operations should be serialized, the first must finish first; otherwise the second should finish first.
+// Parameterized testing is used to test each pair of operations in a separate test.
 class AttribCacheSerializationTest : public ::testing::TestWithParam<std::tuple<std::string, std::string, int>> {
 public:
     void prep_mock(std::shared_ptr<std::mutex> m, std::shared_ptr<std::condition_variable> cv, std::shared_ptr<int> calls, std::shared_ptr<bool> sleep_finished);
 
+    // Using a nice mock greatly simplifies testing, which is fine because we're not testing for cache correctness here.
     std::shared_ptr<::testing::NiceMock<MockBlobClient>> mockClient;
     std::shared_ptr<blob_client_attr_cache_wrapper> attrib_cache_wrapper;
     std::string container_name;
@@ -43,6 +51,7 @@ public:
     }
 };
 
+// Mocked methods should call into this; it tracks the number of calls that have been made, and sleeps if this is the first call.
 void prep(std::shared_ptr<std::mutex> m, std::shared_ptr<std::condition_variable> cv, std::shared_ptr<int> calls, std::shared_ptr<bool> sleep_finished)
 {
     int call = 0;
@@ -61,6 +70,7 @@ void prep(std::shared_ptr<std::mutex> m, std::shared_ptr<std::condition_variable
     }
 }
 
+// Sets up a default action on every potential mocked method.
 void AttribCacheSerializationTest::prep_mock(std::shared_ptr<std::mutex> m, std::shared_ptr<std::condition_variable> cv, std::shared_ptr<int> calls, std::shared_ptr<bool> sleep_finished)
 {
     ON_CALL(*mockClient, get_blob_property(_, _))
@@ -70,7 +80,7 @@ void AttribCacheSerializationTest::prep_mock(std::shared_ptr<std::mutex> m, std:
         return blob_property(true);
     }));
 
-    ON_CALL(*mockClient, list_blobs_hierarchical(_, _ ,_, _, _)) // containername, delimiter, token, prefix, max
+    ON_CALL(*mockClient, list_blobs_hierarchical(_, _ ,_, _, _))
     .WillByDefault(::testing::InvokeWithoutArgs([=] ()
     {
         prep(m, cv, calls, sleep_finished);
@@ -120,6 +130,8 @@ void AttribCacheSerializationTest::prep_mock(std::shared_ptr<std::mutex> m, std:
     }));
 }
 
+// This maps the operation name to the code required to run the actual operation.
+// A promise is used in the event that the code is being called async.
 std::map<std::string, std::function<void(std::shared_ptr<blob_client_attr_cache_wrapper>, std::string, std::string, std::promise<void>)>> fnMap = 
 {
     {"Get", [](std::shared_ptr<blob_client_attr_cache_wrapper> attrib_cache_wrapper, std::string container_name, std::string blob, std::promise<void> promise)
@@ -180,6 +192,7 @@ std::map<std::string, std::function<void(std::shared_ptr<blob_client_attr_cache_
         }},
 };
 
+// Helpers that look at the operation name.  Helps determine what the expected behavior is (whether or not to expect the calls to be serialized.)
 bool includes_download_operation(std::string op1, std::string op2)
 {
     return (op1.find("Download") == 0) || (op2.find("Download") == 0);
@@ -190,6 +203,7 @@ bool is_list_operation(std::string op)
     return op.find("List") == 0;
 }
 
+// Based on the operation name and the scenario, this calculates whether or not the test should expect the operations to be synchronized.
 bool expect_synchronization(std::string first_operation, std::string second_operation, int scenario)
 {
     if (includes_download_operation(first_operation, second_operation))
@@ -225,19 +239,21 @@ TEST_P(AttribCacheSerializationTest, Run)
     std::shared_ptr<int> calls = std::make_shared<int>(0);
     std::shared_ptr<bool> sleep_finished = std::make_shared<bool>(false);
 
+    // Note that listing operations here are a special case - instead of passing in the blob name, we need to pass in the prefix of the blob (meaning, the directory name)
     std::string input1 = is_list_operation(firstOperation) ? "dir1" : "dir1/bloba";
 
     std::string input2;
+    //TODO: use an enum instead of an int.
     switch (scenario)
     {
         case 0:
-            input2 = is_list_operation(secondOperation) ? "dir1" : "dir1/bloba";
+            input2 = is_list_operation(secondOperation) ? "dir1" : "dir1/bloba"; // Same blob
             break;
         case 1:
-            input2 = is_list_operation(secondOperation) ? "dir2" : "dir2/bloba";
+            input2 = is_list_operation(secondOperation) ? "dir2" : "dir2/bloba"; // Different directory
             break;
         case 2:
-            input2 = is_list_operation(secondOperation) ? "dir1" : "dir1/blobb";
+            input2 = is_list_operation(secondOperation) ? "dir1" : "dir1/blobb"; // Same directory, different blob.
             break;
         default:
             FAIL() << "No such scenario " << scenario;
@@ -274,7 +290,7 @@ TEST_P(AttribCacheSerializationTest, Run)
     slow_call.join();
 }
 
-
+// Generates the list of operations
 std::vector<std::string> getKeys()
 {
     std::vector<std::string> keys;
@@ -285,7 +301,8 @@ std::vector<std::string> getKeys()
     return keys;
 }
 
-std::string myGetTestName(::testing::TestParamInfo<std::tuple<std::string, std::string, int>> info)
+// Helper to generate a (more) friendly name for a given test, based on the test parameters.
+std::string getTestName(::testing::TestParamInfo<std::tuple<std::string, std::string, int>> info)
 {
     std::string scenario;
     switch (std::get<2>(info.param))
@@ -306,4 +323,4 @@ std::string myGetTestName(::testing::TestParamInfo<std::tuple<std::string, std::
     return ret + std::get<0>(info.param) + "Then" + std::get<1>(info.param) + scenario;
 }
 
-INSTANTIATE_TEST_CASE_P(TmpName, AttribCacheSerializationTest, ::testing::Combine(::testing::ValuesIn(getKeys()), ::testing::ValuesIn(getKeys()), ::testing::Values(0, 1, 2)), myGetTestName);
+INSTANTIATE_TEST_CASE_P(TmpName, AttribCacheSerializationTest, ::testing::Combine(::testing::ValuesIn(getKeys()), ::testing::ValuesIn(getKeys()), ::testing::Values(0, 1, 2)), getTestName);

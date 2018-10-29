@@ -560,7 +560,7 @@ namespace microsoft_azure { namespace storage {
         bool m_valid;
     };
 
-
+    // A wrapper around the "blob_client_wrapper" that provides in-memory caching for "get_blob_properties" calls.
     class blob_client_attr_cache_wrapper : public sync_blob_client
     {
     public:
@@ -593,61 +593,61 @@ namespace microsoft_azure { namespace storage {
             return m_blob_client_wrapper != NULL;
         }
 
-//        class dir_cache_item;
-
-        class cache_item
+        // Represents a blob on the service
+        class blob_cache_item
         {
         public:
-            cache_item(std::string name/*, std::shared_ptr<dir_cache_item> parent*/) : m_confirmed(false), m_mutex(), m_name(name)/*, m_parent(parent) */
+            blob_cache_item(std::string name, blob_property props) : m_confirmed(false), m_mutex(), m_name(name), m_props(props)
             {
 
             }
+
+
+            // True if this item should accurately represent a blob on the service.
+            // False if not (or unknown).  Marking an item as not confirmed is invalidating the cache.
             bool m_confirmed;
+
+            // A mutex that can be locked in shared or unique mode (reader/writer lock)
+            // TODO: Consider switching this to be a regular mutex
             std::shared_timed_mutex m_mutex;
+
+            // Name of the blob
             std::string m_name;
-//            std::shared_ptr<dir_cache_item> m_parent;
-        };
 
-        class blob_cache_item : public cache_item
-        {
-        public:
-            blob_cache_item(std::string name, /*std::shared_ptr<dir_cache_item> parent, */blob_property props) : cache_item(name/*, parent*/), m_props(props)
-            {
-
-            }
+            // The (cached) properties of the blob
             blob_property m_props;
         };
 
-/*        class dir_cache_item : public cache_item
-        {
-        public:
-            dir_cache_item(std::string name, std::shared_ptr<dir_cache_item> parent) : cache_item(name, parent), m_child_dirs(), m_child_blobs()
-            {
-
-            }
-            std::map<std::string, std::shared_ptr<dir_cache_item>> m_child_dirs;
-            std::map<std::string, std::shared_ptr<blob_cache_item>> m_child_blobs;
-        };
-*/
+        // A thread-safe cache of the properties of the blobs in a container on the service.
+        // In order to access or update a single cache item, you must lock on the mutex in the relevant blob_cache_item, and also on the mutex representing the parent directory.
+        // The directory mutex must always be locked before the blob mutex, and no thread should ever have more than one blob mutex (or directory) held at once - this will prevent deadlocks.
+        // For example, to access the properties of a blob "dir1/dir2/blobname", you need to access and lock the mutex returned by get_dir_item("dir1/dir2"), and then the mutex in the blob_cache_item
+        // returned by get_blob_item("dir1/dir2/blobname").
+        // 
+        // To read the properties of the blob from the cache, lock both mutexes in shared mode.
+        // To update the properties of a single blob (or to invalidate a cache item), grab the directory mutex in shared mode, and the blob mutex in unique mode.  The mutexes must be held during both the
+        // relevant service call and the following cache update.
+        // For a 'list blobs' request, first grab the mutex for the directory in unique mode.  Then, make the request and parse the response.  For each blob in the response, grab the blob mutex for that item in unique mode 
+        // before updating it.  Don't release the directory mutex until all blobs have been updated.
+        // 
+        // TODO: Currently, the maps holding the cached information grow without bound; this should be fixed.
+        // TODO: Implement a cache timeout
+        // TODO: When we no longer use an internal copy of cpplite, the attrib cache code should stay with blobfuse - it's not really applicable in the general cpplite use case.
         class attribute_cache
         {
-            public:
+        public:
             attribute_cache() : blob_cache(), blobs_mutex(), dir_cache(), dirs_mutex()
             {
-//                root = std::make_shared<dir_cache_item>("", nullptr);
-//                root->m_confirmed = true;
-//                dir_cache[""] = root;
             }
 
             std::shared_ptr<std::shared_timed_mutex> get_dir_item(const std::string& path);
             std::shared_ptr<blob_cache_item> get_blob_item(const std::string& path);
 
-//            std::shared_ptr<dir_cache_item> root;
+        private:
             std::map<std::string, std::shared_ptr<blob_cache_item>> blob_cache;
-            std::mutex blobs_mutex;
-//            std::map<std::string, std::shared_ptr<dir_cache_item>> dir_cache;
+            std::mutex blobs_mutex; // Used to protect the blob_cache map itself, not items in the map.
             std::map<std::string, std::shared_ptr<std::shared_timed_mutex>> dir_cache;
-            std::mutex dirs_mutex;
+            std::mutex dirs_mutex;// Used to protect the dir_cache map itself, not items in the map.
         };
 
         /// <summary>

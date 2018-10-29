@@ -6,6 +6,7 @@
 using ::testing::_;
 using ::testing::Return;
 
+// Used for GoogleMock
 class MockBlobClient : public sync_blob_client {
 public:
     MOCK_CONST_METHOD0(is_valid, bool());
@@ -21,23 +22,24 @@ public:
     MOCK_METHOD4(start_copy, void(const std::string &sourceContainer, const std::string &sourceBlob, const std::string &destContainer, const std::string &destBlob));
 };
 
+// These tests primarily test correctness of the attr cache - both that the data is correct, and that data is being correctly cached.
+// This file does not test synchronization behavior - that's in a different file.
+// 
+// Overall reminder regarding the GoogleTest assertion macros - 
+// The EXPECT_* macros are used to validate correctness non-fatally.  Meaning, if an expectation fails, the test will fail, but will continue to run to completion.
+// The ASSERT_* macros are supposed to be fatal.  If the assertion fails, the test fails, and the method returns at that point.  (Note that the caller will continue to run.)
 class AttribCacheTest : public ::testing::Test {
 public:
     // Usually using a strict mock is bad practice, but we're using it here because we're testing caching behavior.
     // Nice mocks or naggy mocks could ignore calls that should fail tests (because the cache is being used incorrectly.)
-//    std::shared_ptr<::testing::NiceMock<MockBlobClient>> mockClient;
     std::shared_ptr<::testing::StrictMock<MockBlobClient>> mockClient;
     std::shared_ptr<blob_client_attr_cache_wrapper> attrib_cache_wrapper;
     std::string container_name;
-
-    void helper_sync_test2(bool firstIsList, bool secondIsList, bool collide_dir_name, bool collide_blob_name);
-    void prep_mock(std::function<std::shared_ptr<blob_property>(int)> prop_gen, std::function<std::shared_ptr<list_blobs_hierarchical_response>(int)> list_gen, std::shared_ptr<std::mutex> m, std::shared_ptr<std::condition_variable> cv, std::shared_ptr<int> calls, std::shared_ptr<bool> sleep_finished);
 
     // This runs before each test.
     virtual void SetUp()
     {
        container_name = "container";
-//       mockClient = std::make_shared<::testing::NiceMock<MockBlobClient>>();
        mockClient = std::make_shared<::testing::StrictMock<MockBlobClient>>();
        attrib_cache_wrapper = std::make_shared<blob_client_attr_cache_wrapper>(mockClient);
     }
@@ -47,6 +49,7 @@ public:
     }
 };
 
+// Helper methods for checking equality of blob properties and metadata
 void assert_metadata_equal(std::vector<std::pair<std::string, std::string>>& left, std::vector<std::pair<std::string, std::string>>& right)
 {
     ASSERT_EQ(left.size(), right.size()) << "blob_property objects not equal; differing metadata count.";
@@ -116,24 +119,7 @@ void assert_list_response_objects_equal(list_blobs_hierarchical_response &left, 
     }
 }
 
-TEST_F(AttribCacheTest, GetBlobPropertiesSingle)
-{
-    std::string blob = "blob";
-
-    blob_property prop(true);
-    prop.etag = "sampleEtag";
-    prop.size = 4;
-    prop.metadata = {std::make_pair("k5", "v5"), std::make_pair("k1", "v1"), std::make_pair("k2", "v2"), std::make_pair("k3", "v3")};
-
-    EXPECT_CALL(*mockClient, get_blob_property(container_name, blob))
-    .Times(1)
-    .WillOnce(Return(prop));
-    blob_property newprop = attrib_cache_wrapper->get_blob_property(container_name, blob);
-    blob_property newprop2 = attrib_cache_wrapper->get_blob_property(container_name, blob);
-
-    assert_blob_property_objects_equal(newprop, newprop2);
-}
-
+// Helper for creating a sample blob_property object with some sample data.
 blob_property create_blob_property(std::string etag, unsigned long long size)
 {
     blob_property props(true);
@@ -156,7 +142,57 @@ blob_property create_blob_property(std::string etag, unsigned long long size)
     return props;
 }
 
-// Tests that regardless of multiple calls to get_property or ordering, each service call is only made once.
+// Helper for converting a blob_property object into a list_blobs_hierarchical_item.
+// TODO: Remove this once cpplite unifies these two types.
+list_blobs_hierarchical_item blob_property_to_item(std::string name, blob_property prop, bool is_directory)
+{
+    list_blobs_hierarchical_item item;
+    item.name = name;
+    item.is_directory = is_directory;
+    item.cache_control = prop.cache_control;
+    item.content_encoding = prop.content_encoding;
+    item.content_language = prop.content_language;
+    item.content_length = prop.size;
+    item.content_md5 = prop.content_md5;
+    item.content_type = prop.content_type;
+    item.etag = prop.etag;
+    item.metadata = prop.metadata;
+    item.copy_status = prop.copy_status;
+
+    char buf[30];
+    std::time_t t = prop.last_modified;
+    std::tm *pm;
+    pm = std::gmtime(&t);
+    size_t s = std::strftime(buf, 30, constants::date_format_rfc_1123, pm);
+    item.last_modified = std::string(buf, s);
+
+//  Add when implemented:
+//    item.content_disposition = prop.content_disposition;
+//    Lease status / state / duration
+
+    return item;
+}
+
+// Base case - check that GetBlobProperties calls are cached.
+TEST_F(AttribCacheTest, GetBlobPropertiesSingle)
+{
+    std::string blob = "blob";
+
+    blob_property prop(true);
+    prop.etag = "sampleEtag";
+    prop.size = 4;
+    prop.metadata = {std::make_pair("k5", "v5"), std::make_pair("k1", "v1"), std::make_pair("k2", "v2"), std::make_pair("k3", "v3")};
+
+    EXPECT_CALL(*mockClient, get_blob_property(container_name, blob))
+    .Times(1)
+    .WillOnce(Return(prop));
+    blob_property newprop = attrib_cache_wrapper->get_blob_property(container_name, blob);
+    blob_property newprop2 = attrib_cache_wrapper->get_blob_property(container_name, blob);
+
+    assert_blob_property_objects_equal(newprop, newprop2);
+}
+
+// Tests that regardless of multiple calls to get_property or ordering, each blob makes only one service call.
 TEST_F(AttribCacheTest, GetBlobPropertiesMultiple)
 {
     std::string blob1 = "blob1";
@@ -200,36 +236,7 @@ TEST_F(AttribCacheTest, GetBlobPropertiesMultiple)
     assert_blob_property_objects_equal(prop3, prop3copy1);
 }
 
-list_blobs_hierarchical_item blob_property_to_item(std::string name, blob_property prop, bool is_directory)
-{
-    list_blobs_hierarchical_item item;
-    item.name = name;
-    item.is_directory = is_directory;
-    item.cache_control = prop.cache_control;
-    item.content_encoding = prop.content_encoding;
-    item.content_language = prop.content_language;
-    item.content_length = prop.size;
-    item.content_md5 = prop.content_md5;
-    item.content_type = prop.content_type;
-    item.etag = prop.etag;
-    item.metadata = prop.metadata;
-    item.copy_status = prop.copy_status;
-
-
-    char buf[30];
-    std::time_t t = prop.last_modified;
-    std::tm *pm;
-    pm = std::gmtime(&t);
-    size_t s = std::strftime(buf, 30, constants::date_format_rfc_1123, pm);
-    item.last_modified = std::string(buf, s);
-
-//  Add when implemented:
-//    item.content_disposition = prop.content_disposition;
-//    Lease status / state / duration
-
-    return item;
-    }
-
+// Check that listing operations cache the returned blob properties
 TEST_F(AttribCacheTest, GetBlobPropertiesListSimple)
 {
     std::string blob1 = "blob1";
@@ -373,10 +380,12 @@ TEST_F(AttribCacheTest, GetBlobPropertiesListRepeated)
     assert_blob_property_objects_equal(prop5_v2, propcache5_2);
 }
 
+// These tests ensure that methods other than get_blob_properties and list_blobs invalidate the cache when called.
+// We use GoogleTest's parameterized testing to generate one test per method.
 class AttribCacheInvalidateCacheTest : public AttribCacheTest, public ::testing::WithParamInterface<std::string> {
-
 };
 
+// Maps the name of an operation to the code needed to call the operation under test.
 std::map<std::string, std::function<void(std::shared_ptr<blob_client_attr_cache_wrapper>, std::string, std::string)>> operationMap = 
 {
     {"Put", [](std::shared_ptr<blob_client_attr_cache_wrapper> attrib_cache_wrapper, std::string container_name, std::string blob)
@@ -419,6 +428,8 @@ std::map<std::string, std::function<void(std::shared_ptr<blob_client_attr_cache_
         }}, 
 };
 
+// Maps the name of an operation to the code needed to set up the expectation for that operation on the mock.
+// Needed because we are using a StrictMock, and we want to validate the exact call sequence.
 std::map<std::string, std::function<void(std::shared_ptr<::testing::StrictMock<MockBlobClient>>, std::string, std::string, ::testing::Sequence)>> expectationMap = 
 {
     {"Put", [](std::shared_ptr<::testing::StrictMock<MockBlobClient>> mockClient, std::string container_name, std::string blob_name, ::testing::Sequence seq)
@@ -467,9 +478,9 @@ std::map<std::string, std::function<void(std::shared_ptr<::testing::StrictMock<M
         .Times(1)
         .InSequence(seq);
     }},
-
 };
 
+// For each operation, whether or not the test should expect the operation to invalidate the cache.
 std::map<std::string, bool> expectInvalidate = 
 {
     {"Put", true},
@@ -491,20 +502,16 @@ TEST_P(AttribCacheInvalidateCacheTest, Run)
     blob_property prop1 = create_blob_property("etag1", 4);
     blob_property prop2 = create_blob_property("etag2", 17);
 
+    // This is a way to "checkpoint" calls - used with a Sequence, it helps ensure that the expectations are being called from the correct point.
+    // Otherwise, it might be unclear exactly which get_blob_property call was being matched in the mock.
     ::testing::MockFunction<void(std::string check_point_name)> check;
     ::testing::Sequence seq;
 
-    EXPECT_CALL(*mockClient, get_blob_property(container_name, blob_name)).Times(1).InSequence(seq)
-    .WillOnce(Return(prop1));
-
+    EXPECT_CALL(*mockClient, get_blob_property(container_name, blob_name)).Times(1).InSequence(seq).WillOnce(Return(prop1));
     EXPECT_CALL(check, Call("1")).Times(1).InSequence(seq);
-
     EXPECT_CALL(check, Call("2")).Times(1).InSequence(seq);
-
     expectationMap[operation_name](mockClient, container_name, blob_name, seq);
-
     EXPECT_CALL(check, Call("3")).Times(1).InSequence(seq);
-
     if (expectInvalidate[operation_name])
     {
         EXPECT_CALL(*mockClient, get_blob_property(container_name, blob_name)).Times(1).InSequence(seq)
@@ -524,6 +531,7 @@ TEST_P(AttribCacheInvalidateCacheTest, Run)
     assert_blob_property_objects_equal(expectInvalidate[operation_name] ? prop2 : prop1, prop_cache3);
 }
 
+// Helpers for instantiating the parameterized tests
 std::vector<std::string> getKeys2()
 {
     std::vector<std::string> keys;
@@ -534,7 +542,7 @@ std::vector<std::string> getKeys2()
     return keys;
 }
 
-
+// Helper to generate a more-informative test name
 std::string getTestName(::testing::TestParamInfo<std::string> info)
 {
     return info.param;
@@ -542,7 +550,7 @@ std::string getTestName(::testing::TestParamInfo<std::string> info)
 
 INSTANTIATE_TEST_CASE_P(TmpName, AttribCacheInvalidateCacheTest, ::testing::ValuesIn(getKeys2()), getTestName);
 
-
+// TODO: move main() into a separate file; it should exist only once for the 'blobfusetests' application.
 int main(int argc, char** argv) {
   ::testing::InitGoogleMock(&argc, argv);
   return RUN_ALL_TESTS();
